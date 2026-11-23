@@ -10,7 +10,7 @@ import { useEscapeKey } from '@/hooks/useEscapeKey';
 
 import { Milestone, Project, Applicant } from '@/types';
 import { ImageLightboxModal } from './ImageLightboxModal';
-import { ApplicantCard } from './ApplicantCard';
+import { ApplicantCard, type ApplicantCardData } from './ApplicantCard';
 import { FreelancerProfileModal } from './FreelancerProfileModal';
 import { ProjectChatModal } from './ProjectChatModal';
 import { ProjectCardSkeletonList } from '@/components/skeletons';
@@ -19,6 +19,13 @@ import { useTokenBalance, getBalanceShortfall } from '@/hooks/useCreateProjectFo
 import { usePersistentTab } from '@/hooks/usePersistentTab';
 import { BalanceWarningBadge } from '@/components/BalanceWarningBadge';
 import { LiquidityDepthOptimizer } from '@/components/LiquidityDepthOptimizer';
+import { TokenPriceAlertWidget } from '@/components/TokenPriceAlertWidget';
+import { StarredFreelancersList } from '@/components/StarredFreelancersList';
+import { NotificationScheduleModal } from '@/components/NotificationScheduleModal';
+import { ProposalCounterOfferModal } from '@/components/ProposalCounterOfferModal';
+import { useStarredFreelancers } from '@/hooks/useStarredFreelancers';
+import type { CounterOffer } from '@/lib/counter-offer';
+import { showSorobanErrorToast } from '@/components/SorobanErrorToast';
 import { ProjectAuditLog } from '@/components/ProjectAuditLog';
 import { CalendarExportButton } from '@/components/CalendarExportButton';
 import { DownloadReceiptButton } from '@/components/DownloadReceiptButton';
@@ -30,7 +37,6 @@ import {
   assignFreelancerOnChain,
   getStellarExplorerUrl,
   DEFAULT_ESCROW_CONTRACT_ID,
-  showSorobanErrorToast,
   setSorobanBaseFee,
 } from '@/lib/soroban';
 
@@ -41,10 +47,13 @@ export interface ClientDashboardProps {
 export function ClientDashboard({ defaultTab = 'projects' }: ClientDashboardProps) {
   const router = useRouter();
   const { address } = useWalletStore();
-  const [activeTab, setActiveTab] = usePersistentTab<'projects' | 'create' | 'applicants'>({
+  const activeWalletAddress = useActiveWalletAddress();
+  const { starred, isStarred, toggle: toggleStarred, setNotes: setStarredNotes } =
+    useStarredFreelancers(activeWalletAddress);
+  const [activeTab, setActiveTab] = usePersistentTab<"projects" | "create" | "applicants" | "saved">({
     key: 'client_active_tab',
     defaultTab,
-    allowedTabs: ['projects', 'create', 'applicants'] as const,
+    allowedTabs: ['projects', 'create', 'applicants', 'saved'] as const,
     walletAddress: address,
   });
   const [loading, setLoading] = useState(true);
@@ -131,6 +140,10 @@ export function ClientDashboard({ defaultTab = 'projects' }: ClientDashboardProp
   const [showAddMilestoneModal, setShowAddMilestoneModal] = useState(false);
   const [showApExportModal, setShowApExportModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Proposal counter-offer negotiation (#150)
+  const [counterOfferTarget, setCounterOfferTarget] = useState<ApplicantCardData | null>(null);
+  const [counterOfferSubmitting, setCounterOfferSubmitting] = useState(false);
 
   // Function to fetch real projects from backend
   const fetchBackendProjects = async (pageToFetch = currentPage) => {
@@ -420,6 +433,89 @@ export function ClientDashboard({ defaultTab = 'projects' }: ClientDashboardProp
     }
   };
 
+  // Proposal counter-offer negotiation (#150)
+  const handleSubmitCounterOffer = async (offer: CounterOffer) => {
+    if (!counterOfferTarget) return;
+    if (!address) {
+      throw new Error('Please connect your client wallet first');
+    }
+
+    setCounterOfferSubmitting(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await authFetch(`${apiUrl}/api/proposals/${counterOfferTarget.id}/counter-offer`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'counter',
+          milestones: offer.milestones,
+          note: offer.note,
+          actor_address: address,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to send counter-offer');
+      }
+
+      setSelectedProjectForApplicants((prev) =>
+        prev
+          ? {
+              ...prev,
+              applicants: (prev.applicants || []).map((applicant) =>
+                applicant.id === counterOfferTarget.id
+                  ? {
+                      ...applicant,
+                      counter_offer: offer,
+                      negotiation_status: 'countered' as const,
+                    }
+                  : applicant
+              ),
+            }
+          : prev
+      );
+      setCounterOfferTarget(null);
+      await fetchBackendProjects();
+    } finally {
+      setCounterOfferSubmitting(false);
+    }
+  };
+
+  const handleRespondToCounterOffer = async (
+    action: 'accept' | 'decline',
+    applicant: ApplicantCardData
+  ) => {
+    if (!address) {
+      toast.error('Please connect your client wallet first');
+      return;
+    }
+
+    setCounterOfferSubmitting(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await authFetch(`${apiUrl}/api/proposals/${applicant.id}/counter-offer`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, actor_address: address }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Failed to ${action} counter-offer`);
+      }
+      toast.success(
+        action === 'accept'
+          ? 'Counter-offer accepted — agreed terms locked into the project.'
+          : 'Counter-offer declined. The original proposal remains active.'
+      );
+      await fetchBackendProjects();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update the counter-offer');
+    } finally {
+      setCounterOfferSubmitting(false);
+    }
+  };
+
   // File Upload Handler with data URL & file metadata for live thumbnail previews
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -676,15 +772,8 @@ export function ClientDashboard({ defaultTab = 'projects' }: ClientDashboardProp
         {/* Network fee gauge and token price alerts (#256, #253) */}
         {activeTab === 'projects' && (
           <div className="grid gap-4 lg:grid-cols-2">
-            <GasFeeEstimatorWidget onChange={(selection) => setSorobanBaseFee(selection.feeStroops)} />
-            <TokenPriceAlertWidget
-              onFundNow={(alert, price) => {
-                toast.success(
-                  `Funding at ${alert.token} $${price?.toFixed(4) ?? alert.target}. Choose a project to fund.`
-                );
-                setActiveTab('create');
-              }}
-            />
+            <GasFeeEstimatorWidget onFeeSelected={(feeStroops) => setSorobanBaseFee(feeStroops)} />
+            <TokenPriceAlertWidget />
           </div>
         )}
 
@@ -1599,6 +1688,11 @@ export function ClientDashboard({ defaultTab = 'projects' }: ClientDashboardProp
                     onAccept={(id) => handleAcceptProposal(id)}
                     onDeny={(id) => handleDenyProposal(id)}
                     onOpenProfile={() => setProfileApplicant(applicant)}
+                    projectBudget={selectedProjectForApplicants?.budget}
+                    tokenSymbol={selectedProjectForApplicants?.token || 'USDC'}
+                    counterOfferSubmitting={counterOfferSubmitting}
+                    onCounterOffer={(target) => setCounterOfferTarget(target)}
+                    onRespondToCounterOffer={handleRespondToCounterOffer}
                     isStarred={isStarred(applicant.stellar_address || applicant.freelancer_address || '')}
                     onToggleStar={(a) => {
                       const addr = a.stellar_address || a.freelancer_address || '';
@@ -1832,6 +1926,36 @@ export function ClientDashboard({ defaultTab = 'projects' }: ClientDashboardProp
           </div>
         </div>
       )}
+
+      {/* Proposal counter-offer negotiation modal (#150) */}
+      <ProposalCounterOfferModal
+        key={counterOfferTarget?.id || 'closed-counter-offer'}
+        isOpen={Boolean(counterOfferTarget)}
+        proposal={
+          counterOfferTarget
+            ? {
+                id: counterOfferTarget.id,
+                project_title: selectedProjectForApplicants?.title,
+                freelancer_address:
+                  counterOfferTarget.freelancer_address || counterOfferTarget.stellar_address,
+                budget: selectedProjectForApplicants?.budget,
+                counter_offer: counterOfferTarget.counter_offer,
+              }
+            : null
+        }
+        originalMilestones={(selectedProjectForApplicants?.milestones || []).map(
+          (milestone) => ({
+            milestone_index: milestone.milestone_index,
+            title: milestone.title,
+            amount: milestone.amount,
+            due_date: milestone.due_date,
+          })
+        )}
+        tokenSymbol={selectedProjectForApplicants?.token || 'USDC'}
+        isSubmitting={counterOfferSubmitting}
+        onClose={() => setCounterOfferTarget(null)}
+        onSubmit={handleSubmitCounterOffer}
+      />
 
       {/* Enterprise Accounts Payable Export Modal */}
       <AccountsPayableExportModal

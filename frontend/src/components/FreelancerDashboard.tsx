@@ -17,10 +17,15 @@ import { DownloadReceiptButton } from '@/components/DownloadReceiptButton';
 import { ProjectFilterBar } from '@/components/ProjectFilterBar';
 import { CryptoId } from '@/components/ui/CryptoId';
 import { usePersistentTab, usePersistentFilter } from '@/hooks/usePersistentTab';
+import {
+  CounterOfferSummary,
+  ProposalCounterOfferModal,
+} from '@/components/ProposalCounterOfferModal';
+import type { CounterOffer } from '@/lib/counter-offer';
 
 export function FreelancerDashboard() {
   const router = useRouter();
-  const { address } = useWalletStore();
+  const { address, activeRole } = useWalletStore();
   const [activeTab, setActiveTab] = usePersistentTab<'explore' | 'proposals' | 'jobs'>({
     key: 'freelancer_active_tab',
     defaultTab: 'explore',
@@ -31,6 +36,10 @@ export function FreelancerDashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [lightboxImage, setLightboxImage] = useState<{ url: string; name?: string } | null>(null);
+
+  // Counter-offer renegotiation (#150)
+  const [reCounterTarget, setReCounterTarget] = useState<Proposal | null>(null);
+  const [counterOfferSubmitting, setCounterOfferSubmitting] = useState(false);
 
   // Chat Modal State
   const [chatModalState, setChatModalState] = useState<{
@@ -306,6 +315,8 @@ export function FreelancerDashboard() {
             budget: Number(p.projects?.budget) || 0,
             status: p.status || 'pending',
             created_at: new Date(p.created_at || Date.now()).toISOString().split('T')[0],
+            counter_offer: p.counter_offer || null,
+            negotiation_status: p.negotiation_status || 'none',
           }));
           setProposals(mapped);
         }
@@ -319,6 +330,71 @@ export function FreelancerDashboard() {
     fetchBackendProjects();
     fetchMyProposals();
   }, [address]);
+
+  const handleSubmitCounterOffer = async (offer: CounterOffer) => {
+    if (!reCounterTarget) return;
+    if (!address) throw new Error('Please connect your freelancer wallet first');
+
+    setCounterOfferSubmitting(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await authFetch(
+        `${apiUrl}/api/proposals/${reCounterTarget.id}/counter-offer`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'counter',
+            milestones: offer.milestones,
+            note: offer.note,
+            actor_address: address,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to send counter-offer');
+      }
+      await fetchMyProposals();
+      setReCounterTarget(null);
+    } finally {
+      setCounterOfferSubmitting(false);
+    }
+  };
+
+  const handleRespondToCounterOffer = async (
+    action: 'accept' | 'decline',
+    prop: Proposal
+  ) => {
+    if (!address) {
+      toast.error('Please connect your freelancer wallet first');
+      return;
+    }
+
+    setCounterOfferSubmitting(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await authFetch(`${apiUrl}/api/proposals/${prop.id}/counter-offer`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, actor_address: address }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Failed to ${action} counter-offer`);
+      }
+      toast.success(
+        action === 'accept'
+          ? 'Counter-offer accepted — agreed terms are locked into the project.'
+          : 'Counter-offer declined. The original proposal remains active.'
+      );
+      await fetchMyProposals();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update the counter-offer');
+    } finally {
+      setCounterOfferSubmitting(false);
+    }
+  };
 
   // Filtered projects
   const filteredProjects = projects.filter(p => {
@@ -734,6 +810,18 @@ export function FreelancerDashboard() {
                           </a>
                         </div>
                       )}
+
+                      {prop.counter_offer && prop.negotiation_status === 'countered' && (
+                        <CounterOfferSummary
+                          offer={prop.counter_offer}
+                          originalBudget={prop.budget}
+                          tokenSymbol={projects.find((p) => p.id === prop.project_id)?.token || 'USDC'}
+                          isSubmitting={counterOfferSubmitting}
+                          onAccept={() => handleRespondToCounterOffer('accept', prop)}
+                          onDecline={() => handleRespondToCounterOffer('decline', prop)}
+                          onRecounter={() => setReCounterTarget(prop)}
+                        />
+                      )}
                     </div>
 
                     <div className="flex items-center space-x-3 self-start sm:self-start">
@@ -802,6 +890,38 @@ export function FreelancerDashboard() {
         )}
 
       </div>
+
+      {/* Counter-offer renegotiation modal (#150) */}
+      <ProposalCounterOfferModal
+        key={reCounterTarget?.id || 'closed-counter-offer'}
+        isOpen={Boolean(reCounterTarget)}
+        author="freelancer"
+        proposal={
+          reCounterTarget
+            ? {
+                id: reCounterTarget.id,
+                project_title: reCounterTarget.project_title,
+                freelancer_address: reCounterTarget.stellar_address,
+                budget: reCounterTarget.budget,
+                counter_offer: reCounterTarget.counter_offer,
+              }
+            : null
+        }
+        originalMilestones={((reCounterTarget
+          ? projects.find((project) => project.id === reCounterTarget.project_id)?.milestones
+          : []) || []).map((milestone) => ({
+          milestone_index: milestone.milestone_index,
+          title: milestone.title,
+          amount: milestone.amount,
+          due_date: milestone.due_date,
+        }))}
+        tokenSymbol={
+          projects.find((project) => project.id === reCounterTarget?.project_id)?.token || 'USDC'
+        }
+        isSubmitting={counterOfferSubmitting}
+        onClose={() => setReCounterTarget(null)}
+        onSubmit={handleSubmitCounterOffer}
+      />
 
       {/* Project Details Modal */}
       {viewingProjectDetails && (

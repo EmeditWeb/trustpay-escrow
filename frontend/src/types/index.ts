@@ -1,3 +1,5 @@
+import type { CounterOffer } from '@/lib/counter-offer';
+
 export interface Milestone {
   id: string;
   project_id?: string;
@@ -7,11 +9,19 @@ export interface Milestone {
   amount: number;
   status: 'pending' | 'submitted' | 'in_revision' | 'approved' | 'disputed';
   due_date?: string;
+  /** Planned start date used by the Gantt roadmap visualizer (#154). */
+  start_date?: string;
+  /** Milestone indexes that must complete before this milestone starts (#154). */
+  depends_on?: number[];
   submitted_at?: string;
   auto_release_at?: string;
   revision_limit?: number;
   revisions_remaining?: number;
   revision_note?: string;
+  /** Structured revision checklist requested by the client (#153). */
+  revision_checklist?: string[];
+  /** Annotated screenshot attachments stored with the revision request (#153). */
+  revision_attachments?: RevisionAttachment[];
   deliverable_hash?: string;
   deliverable_url?: string;
   deliverable_notes?: string;
@@ -51,6 +61,26 @@ export interface Project {
   yield_enabled?: boolean;
   estimated_yield?: number;
   blend_pool_address?: string;
+  /** Recurring retainer agreement metadata (#149). */
+  retainer_config?: RetainerConfig | null;
+}
+
+export interface RevisionAttachment {
+  name: string;
+  size?: number;
+  type?: string;
+  /** Data URL preview so the deliverable thread renders the annotation. */
+  url: string;
+}
+
+export interface RetainerConfig {
+  frequency: 'weekly' | 'biweekly' | 'monthly';
+  cycles: number;
+  amountPerCycle: number;
+  startDate: string;
+  token?: string;
+  status?: 'active' | 'completed' | 'terminated';
+  completedCycles?: number;
 }
 
 export interface Applicant {
@@ -68,6 +98,8 @@ export interface Applicant {
   granted?: boolean;
   created_at?: string;
   zk_attestation?: unknown;
+  counter_offer?: CounterOffer | null;
+  negotiation_status?: 'none' | 'countered' | 'accepted' | 'declined';
 }
 
 export interface Proposal {
@@ -82,7 +114,12 @@ export interface Proposal {
   budget: number;
   status: 'pending' | 'accepted' | 'denied' | 'granted' | 'rejected';
   created_at: string;
+  /** Proposal counter-offer terms exchanged before escrow lock (#150). */
+  counter_offer?: CounterOffer | null;
+  negotiation_status?: 'none' | 'countered' | 'accepted' | 'declined';
 }
+
+export type { CounterOffer, MilestoneTerms } from '@/lib/counter-offer';
 
 export interface User {
   id: string;

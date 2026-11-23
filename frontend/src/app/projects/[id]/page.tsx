@@ -36,6 +36,12 @@ import {
 import { useSep07Signer } from '@/hooks/useSep07Signer';
 import { DeliverableDiffViewer } from '@/components/DeliverableDiffViewer';
 import { SorobanEventStreamDrawer } from '@/components/SorobanEventStreamDrawer';
+import { MilestoneGanttChart } from '@/components/MilestoneGanttChart';
+import { DeliverableChecksums } from '@/components/FileChecksumBadge';
+import {
+  RequestRevisionModal,
+  type RevisionRequestPayload,
+} from '@/components/RequestRevisionModal';
 
 export default function ProjectDetailsPage() {
   const params = useParams();
@@ -68,7 +74,6 @@ export default function ProjectDetailsPage() {
   const [deliverableNotes, setDeliverableNotes] = useState('');
 
   const [activeRevisionModal, setActiveRevisionModal] = useState<Milestone | null>(null);
-  const [revisionNote, setRevisionNote] = useState('');
 
   const [activeApproveModal, setActiveApproveModal] = useState<Milestone | null>(null);
   const [activeDisputeModal, setActiveDisputeModal] = useState(false);
@@ -94,10 +99,7 @@ export default function ProjectDetailsPage() {
     setDeliverableUrl('');
     setDeliverableNotes('');
   }, Boolean(activeDeliverableModal));
-  useEscapeKey(() => {
-    setActiveRevisionModal(null);
-    setRevisionNote('');
-  }, Boolean(activeRevisionModal));
+  useEscapeKey(() => setActiveRevisionModal(null), Boolean(activeRevisionModal));
   useEscapeKey(() => setActiveApproveModal(null), Boolean(activeApproveModal));
   useEscapeKey(() => setShowFundEscrowModal(false), showFundEscrowModal);
   useEscapeKey(() => setActiveDisputeModal(false), activeDisputeModal);
@@ -334,14 +336,10 @@ export default function ProjectDetailsPage() {
   };
 
   // 2b. Client Action: Request Milestone Revision on-chain
-  const handleRequestRevision = async () => {
+  const handleRequestRevision = async (payload: RevisionRequestPayload) => {
     if (!activeRevisionModal) return;
     if (!address) {
       toast.error('Please connect your client wallet first.');
-      return;
-    }
-    if (!revisionNote.trim()) {
-      toast.error('Please provide specific revision instructions or feedback.');
       return;
     }
 
@@ -376,19 +374,49 @@ export default function ProjectDetailsPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          revision_note: revisionNote.trim(),
+          revision_note: payload.formattedNote,
+          revision_checklist: payload.checklist,
+          revision_attachments: payload.attachments.map((attachment) => ({
+            name: attachment.name,
+            size: attachment.size,
+            type: attachment.type,
+            url: attachment.url,
+          })),
           actor_address: address,
         }),
       });
 
       toast.success('Revision requested on-chain! Timelock paused while freelancer works on updates.');
       setActiveRevisionModal(null);
-      setRevisionNote('');
       await fetchProject();
     } catch (err: any) {
       setTxState((prev) => ({ ...prev, stage: 'error', error: err.message || String(err) }));
       toast.error(`Revision request failed: ${err.message || err}`);
     }
+  };
+
+  // Drag-to-reschedule on draft timelines (#154). Draft dates are local until
+  // the escrow is funded, so the updated project state stays on this page.
+  const handleRescheduleMilestone = (
+    milestone: Milestone,
+    startDate: string,
+    dueDate: string
+  ) => {
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            milestones: (prev.milestones || []).map((item) =>
+              item.id === milestone.id
+                ? { ...item, start_date: startDate, due_date: dueDate }
+                : item
+            ),
+          }
+        : prev
+    );
+    toast.success(
+      `${milestone.title} moved to ${new Date(startDate).toLocaleDateString()} – ${new Date(dueDate).toLocaleDateString()}`
+    );
   };
 
   // 3. Client Action: Approve Milestone & Release on-chain funds
@@ -991,6 +1019,17 @@ export default function ProjectDetailsPage() {
             )}
           </div>
 
+          {project.milestones && project.milestones.length > 0 && (
+            <MilestoneGanttChart
+              milestones={project.milestones}
+              projectStart={project.created_at?.slice(0, 10)}
+              projectEnd={project.deadline}
+              tokenSymbol={tokenSymbol}
+              editable={project.status === 'draft'}
+              onReschedule={handleRescheduleMilestone}
+            />
+          )}
+
           {!project.milestones || project.milestones.length === 0 ? (
             <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-10 text-center flex flex-col items-center justify-center">
               <p className="text-slate-300 font-medium">No milestones created for this project.</p>
@@ -1296,58 +1335,16 @@ export default function ProjectDetailsPage() {
         </div>
       )}
 
-      {/* MODAL 1b: Client Request Revision Modal */}
-      {activeRevisionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 max-w-lg w-full space-y-5 shadow-2xl">
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                Formal Revision Request
-              </span>
-              <h3 className="text-xl font-bold text-white mt-1">{activeRevisionModal.title}</h3>
-              <p className="text-xs text-slate-400 mt-1">
-                Invoking <code className="text-amber-300">request_revision</code> on Soroban resets the 7-day auto-release timelock, transitions the status to <code className="text-amber-300">In Revision</code>, and decrements remaining revisions (
-                <strong>
-                  {Math.max(0, (activeRevisionModal.revisions_remaining ?? activeRevisionModal.revision_limit ?? 2) - 1)}
-                </strong>{' '}
-                revisions will remain).
-              </p>
-            </div>
-
-            <div className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1.5">Revision Feedback & Required Adjustments *</label>
-                <textarea
-                  rows={4}
-                  value={revisionNote}
-                  onChange={(e) => setRevisionNote(e.target.value)}
-                  placeholder="Detail specifically what changes, bug fixes, or missing requirements are needed before approval..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-slate-200 focus:outline-none focus:border-amber-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setActiveRevisionModal(null);
-                  setRevisionNote('');
-                }}
-                className="border-slate-800 text-slate-300 hover:bg-slate-800 rounded-xl text-xs"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleRequestRevision}
-                className="bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold px-5"
-              >
-                Sign & Request Revision 🔄
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* MODAL 1b: Client Request Revision Modal (#153) */}
+      <RequestRevisionModal
+        key={activeRevisionModal?.id || 'closed-revision'}
+        isOpen={Boolean(activeRevisionModal)}
+        milestone={activeRevisionModal}
+        tokenSymbol={tokenSymbol}
+        isSubmitting={txState.isOpen}
+        onClose={() => setActiveRevisionModal(null)}
+        onSubmit={handleRequestRevision}
+      />
 
       {/* MODAL 2: Client Approve Milestone Modal */}
       {activeApproveModal && (

@@ -5,6 +5,11 @@ import { toast } from 'sonner';
 import { CryptoId } from '@/components/ui/CryptoId';
 import { EmbeddedDemoSandbox } from './EmbeddedDemoSandbox';
 import { ProposalExpirationBadge, formatTimeRemaining } from '@/components/ProposalExpirationBadge';
+import { ZkAttestationBadge } from '@/components/ZkAttestationBadge';
+import {
+  CounterOfferSummary,
+} from '@/components/ProposalCounterOfferModal';
+import type { CounterOffer } from '@/lib/counter-offer';
 
 export interface ApplicantCardData {
   id: string;
@@ -22,6 +27,8 @@ export interface ApplicantCardData {
   expires_at?: string;
   granted?: boolean;
   zk_attestation?: unknown;
+  counter_offer?: CounterOffer | null;
+  negotiation_status?: 'none' | 'countered' | 'accepted' | 'declined';
 }
 
 export interface ApplicantCardProps {
@@ -36,9 +43,35 @@ export interface ApplicantCardProps {
   isStarred?: boolean;
   /** When provided, a star toggle is shown on the card. */
   onToggleStar?: (applicant: ApplicantCardData) => void;
+  /** Project budget, used as the baseline for an incoming counter-offer diff (#150). */
+  projectBudget?: number;
+  tokenSymbol?: string;
+  /** Opens the counter-offer editor for this applicant (#150). */
+  onCounterOffer?: (applicant: ApplicantCardData) => void;
+  /** Accepts, declines, or re-counters an incoming counter-offer (#150). */
+  onRespondToCounterOffer?: (
+    action: 'accept' | 'decline',
+    applicant: ApplicantCardData
+  ) => void | Promise<void>;
+  counterOfferSubmitting?: boolean;
 }
 
-export function ApplicantCard({ applicant, onAccept, onDeny, onWithdraw, onOpenChat, isProcessing = false }: ApplicantCardProps) {
+export function ApplicantCard({
+  applicant,
+  onAccept,
+  onDeny,
+  onWithdraw,
+  onOpenChat,
+  onOpenProfile,
+  isProcessing = false,
+  isStarred = false,
+  onToggleStar,
+  projectBudget,
+  tokenSymbol = 'USDC',
+  onCounterOffer,
+  onRespondToCounterOffer,
+  counterOfferSubmitting = false,
+}: ApplicantCardProps) {
   const [copied, setCopied] = useState(false);
   const [actionLoading, setActionLoading] = useState<'accept' | 'deny' | 'withdraw' | null>(null);
 
@@ -175,6 +208,25 @@ export function ApplicantCard({ applicant, onAccept, onDeny, onWithdraw, onOpenC
         </p>
       </div>
 
+      {/* Incoming counter-offer from the freelancer (#150) */}
+      {applicant.counter_offer && applicant.negotiation_status === 'countered' && (
+        <CounterOfferSummary
+          offer={applicant.counter_offer}
+          originalBudget={projectBudget}
+          tokenSymbol={tokenSymbol}
+          isSubmitting={counterOfferSubmitting}
+          onAccept={() => {
+            if (onRespondToCounterOffer) return onRespondToCounterOffer('accept', applicant);
+            return onAccept(applicant.id);
+          }}
+          onDecline={() => {
+            if (onRespondToCounterOffer) return onRespondToCounterOffer('decline', applicant);
+            return onDeny(applicant.id);
+          }}
+          onRecounter={onCounterOffer ? () => onCounterOffer(applicant) : undefined}
+        />
+      )}
+
       {/* Portfolio Link Section */}
       {portfolioUrl && (
         <div className="space-y-1 pt-1">
@@ -226,6 +278,17 @@ export function ApplicantCard({ applicant, onAccept, onDeny, onWithdraw, onOpenC
         {/* Accept / Deny Buttons (Visible when pending) */}
         {currentStatus === 'pending' ? (
           <div className="flex flex-wrap items-center space-x-2.5 self-end sm:self-center">
+            {onCounterOffer && (
+              <button
+                type="button"
+                onClick={() => onCounterOffer(applicant)}
+                disabled={isProcessing || actionLoading !== null}
+                data-testid="applicant-counter-offer"
+                className="px-4 py-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-bold rounded-xl transition-all active:scale-95 disabled:opacity-50"
+              >
+                ↔ Counter Offer
+              </button>
+            )}
             {onWithdraw && (
               <button
                 onClick={handleWithdrawClick}
