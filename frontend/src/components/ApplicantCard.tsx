@@ -1,4 +1,6 @@
 'use client';
+import { AddressBadge } from '@/components/AddressBadge';
+import { PortfolioLinkPreview } from '@/components/PortfolioLinkPreview';
 
 import React, { useState } from 'react';
 import { toast } from 'sonner';
@@ -135,32 +137,10 @@ export function ApplicantCard({
             Freelancer Stellar Address
           </span>
           <div className="flex items-center space-x-2">
-            <CryptoId
-              value={walletAddr}
-              className="sm:text-sm text-white bg-[#232326] px-3 py-1 rounded-xl border border-[#333338] select-all break-all"
-            />
-            <button
-              onClick={handleCopyWallet}
-              className="text-[#a1a1aa] hover:text-white transition-colors p-1 text-xs"
-              title="Copy Wallet Address"
-            >
-              {copied ? '✓' : '📋'}
-            </button>
-            {onToggleStar && (
-              <button
-                type="button"
-                onClick={() => onToggleStar(applicant)}
-                aria-pressed={isStarred}
-                aria-label={isStarred ? 'Remove from saved contractors' : 'Save contractor'}
-                title={isStarred ? 'Remove from saved contractors' : 'Save contractor'}
-                className={`p-1 text-base transition-colors ${
-                  isStarred ? 'text-amber-400 hover:text-amber-300' : 'text-[#71717a] hover:text-amber-300'
-                }`}
-                data-testid="applicant-star-toggle"
-              >
-                {isStarred ? '★' : '☆'}
-              </button>
-            )}
+            <span className="font-mono text-xs sm:text-sm text-white bg-[#232326] px-3 py-1 rounded-xl border border-[#333338] select-all break-all">
+              {walletAddr}
+            </span>
+            <AddressBadge address={walletAddr} showExplorerLink={true} />
           </div>
           {Boolean(applicant.zk_attestation) && (
             <div className="pt-1">
@@ -202,10 +182,12 @@ export function ApplicantCard({
 
       {/* Cover Note Section */}
       <div className="space-y-1.5">
-        <h4 className="text-xs font-bold text-[#e4e4e7] uppercase tracking-wider">Cover Note</h4>
-        <p className="text-xs sm:text-sm text-[#a1a1aa] leading-relaxed whitespace-pre-line bg-[#18181b] p-3.5 rounded-xl border border-[#27272a]">
-          &quot;{coverText}&quot;
-        </p>
+        <h4 className="text-xs font-bold text-[#e4e4e7] uppercase tracking-wider">
+          Cover Note
+        </h4>
+        <div className="bg-[#18181b] p-3.5 rounded-xl border border-[#27272a]">
+          <TruncatedText text={coverText} lines={3} />
+        </div>
       </div>
 
       {/* Incoming counter-offer from the freelancer (#150) */}

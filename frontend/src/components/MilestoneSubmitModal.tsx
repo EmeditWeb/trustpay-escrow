@@ -9,6 +9,7 @@ import { submitMilestoneOnChain, type TxStage } from '@/lib/soroban';
 import {
   deliverableSubmissionSchema,
   parseGitHubPullRequestUrl,
+  isGitHubPullRequestUrl,
   verifyGitHubPullRequest,
   type GitHubPrVerification,
 } from '@/lib/validators';
@@ -320,26 +321,10 @@ export function MilestoneSubmitModal({
               Work Summary <span className="text-red-400">*</span>
             </label>
             <MarkdownDeliverableEditor value={notes} onChange={setNotes} />
-            {(milestone.deliverable_notes || notes.trim()) && (
-              <div>
-                <button
-                  type="button"
-                  onClick={() => setShowDiff((v) => !v)}
-                  className="text-[11px] text-indigo-400 hover:text-indigo-300 underline font-semibold"
-                >
-                  {showDiff ? 'Hide revision diff' : 'Compare with previous revision'}
-                </button>
-                {showDiff && (
-                  <div className="mt-2">
-                    <DeliverableDiffViewer
-                      previousText={milestone.deliverable_notes || ''}
-                      currentText={notes}
-                      previousLabel="Previous revision"
-                      currentLabel="New deliverable"
-                    />
-                  </div>
-                )}
-              </div>
+            {notes.trim().length > 0 && notes.trim().length < 20 && (
+              <p className="text-xs text-red-400 mt-1" data-testid="notes-validation-error">
+                Work summary must be at least 20 characters ({notes.trim().length}/20)
+              </p>
             )}
           </section>
 
@@ -372,6 +357,11 @@ export function MilestoneSubmitModal({
                 Add & Verify
               </button>
             </div>
+            {prInput.trim().length > 0 && !isGitHubPullRequestUrl(prInput) && (
+              <p className="text-xs text-red-400 mt-1" data-testid="pr-url-error">
+                Enter a valid GitHub pull request URL (https://github.com/owner/repo/pull/123)
+              </p>
+            )}
 
             {prLinks.length > 0 && (
               <ul className="space-y-2 pt-1" data-testid="pr-link-list">
@@ -553,7 +543,7 @@ export function MilestoneSubmitModal({
               <button
                 type="button"
                 onClick={onClose}
-                disabled={submitting}
+            disabled={submitting}
                 className="px-4 py-2 text-xs font-semibold rounded-xl text-[#a1a1aa] hover:text-white disabled:opacity-40"
               >
                 Cancel
@@ -561,7 +551,7 @@ export function MilestoneSubmitModal({
               <button
                 type="submit"
                 data-testid="submit-deliverable"
-                disabled={submitting}
+                disabled={submitting || notes.trim().length < 20}
                 className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-md transition-all active:scale-95 disabled:opacity-50"
               >
                 {submitting ? 'Signing & Submitting…' : 'Submit Deliverable ↗'}
